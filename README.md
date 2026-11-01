@@ -12,7 +12,7 @@ Buy falsify at https://dominares.org/tools/falsify: one payment of $49, plus sal
 
 Requirements: The static checks need no other package (tomli comes with it on Python 3.10). The [coverage] extra adds coverage.py, which falsify dead-asserts needs.
 
-This page documents version 1.0.2. Install commands and file paths in the documentation below run inside the private repository you are invited to; the source is not in this repository.
+This page documents version 1.0.3. Install commands and file paths in the documentation below run inside the private repository you are invited to; the source is not in this repository.
 
 ## Documentation
 
@@ -65,7 +65,7 @@ falsify comment-guards            # reruns source-reading tests with comments st
 
 ```
 tests/test_orders.py:41:5: [unfalsifiable-assert] `or True` short-circuits the assertion to always-true
-    fix: assert on the real outcome. For a deliberate determinism check, add `# falsify: ok <why>`.
+    fix: assert on the real outcome. For a deliberate reflexivity check, add `# falsify: ok <why>`.
 tests/test_rates.py:12:5: [phantom-patch] patches `app.client.fetch_rates` with raising=False, and `app.client.fetch_rates` does not exist, so this line patches nothing
 
 falsify: 2 finding(s) (48 files checked, 9 rules)
@@ -84,17 +84,17 @@ addopts = "--falsify"
 #### Static rules (`falsify check`, `pytest --falsify`)
 
 These read your code; nothing is imported from your project and nothing is run. (To
-resolve a patch target in the standard library or an installed package, `phantom-patch`
-imports that module, as the test itself would.)
+resolve a patch target in an installed package, `phantom-patch` imports that module, as the
+test itself would.)
 
 | Rule | Scope | Finds |
 |---|---|---|
-| `unfalsifiable-assert` | tests | `assert x or True`, `assert True`, `assert "text"`, `assert [1, 2]`, `assert (x, "msg")`, `assert "" in s`, `assert f(x) == f(x)`, and the unittest forms `assertTrue(1)`, `assertEqual(a, a)`. |
-| `phantom-patch` | tests | `monkeypatch.setattr(..., raising=False)`, `monkeypatch.delattr(..., raising=False)`, `mock.patch(..., create=True)` and `mock.patch.object(..., create=True)` aimed at a name that does not exist. The patch runs, patches nothing, and the real code stays wired, sometimes making the very network call the test meant to stub. |
-| `missing-import` | all | `from yourpkg.mod import name` where `mod` no longer defines `name` (or the module is gone). Most useful for imports inside functions, which fail only when that function runs. Imports wrapped in `try/except ImportError` are left alone. |
+| `unfalsifiable-assert` | tests | `assert x or True`, `assert True`, `assert "text"`, `assert [1, 2]`, `assert (x, "msg")`, `assert "" in s`, `assert x == x` (the same name or attribute on both sides; two separate calls such as `Point(1, 2) == Point(1, 2)` test `__eq__` and are not reported), and the unittest forms `assertTrue(1)`, `assertEqual(a, a)`. |
+| `phantom-patch` | tests | `monkeypatch.setattr(..., raising=False)`, `monkeypatch.delattr(..., raising=False)`, `mock.patch(..., create=True)` and `mock.patch.object(..., create=True)` aimed at a name that does not exist. The patch runs, patches nothing, and the real code stays wired, sometimes making the very network call the test meant to stub. Not reported, because those flags exist to create a name: a standard-library name (`sys.real_prefix`, `sys.gettotalrefcount`, `builtins.__IPYTHON__` differ by platform and version, so creating one simulates an environment) and a name your own module uses without defining, or looks up with `getattr` / `hasattr` (it expects to be given it). |
+| `missing-import` | all | `from yourpkg.mod import name` where `mod` no longer defines `name` (or the module is gone). Most useful for imports inside functions, which fail only when that function runs. Imports wrapped in `try/except ImportError` are left alone, and so are modules under a package that registers modules at run time (see the limits below). |
 | `call-arity` | all | A call to a function imported from your own package with more positional arguments than it takes, or a keyword it does not accept. A certain `TypeError` whenever the line runs. |
 | `shadowed-import` | all | A name used in a function above that function's own `import` of it. The local import makes the name local to the whole function, so the earlier line raises `UnboundLocalError`, even when the module imports the same name at the top. Undefined-name linters do not report it. |
-| `unwired-guard` | source | A function whose name says it validates or refuses something (`validate_*`, `verify_*`, `sanitize_*`, `guard_*`, ...) that only the tests call. It passes its own tests and protects nothing. |
+| `unwired-guard` | source | A function whose name says it validates or refuses something (`validate_*`, `verify_*`, `sanitize_*`, `guard_*`, ...) that only the tests call. It passes its own tests and protects nothing. Not reported: functions a framework registers (routes, fixtures, `@nox.session`), and the public methods of a class your package exports. |
 | `unbounded-wait` | tests | `threading.Barrier(n)` with no timeout, `t.join()`, `event.wait()`, `proc.wait()`, `queue.get()`, `future.result()` with no timeout. A test stuck on one prints nothing until CI kills the job. |
 | `await-under-lock` | all | `await` (or `async for` / `async with`) inside a plain `with` block holding a thread or file lock. It stalls the event loop when the lock is busy, and does not keep two coroutines apart. `async with` on an asyncio lock is correct and never flagged. |
 | `success-from-except` | source | `return {"ok": True}` (or `success=True`, `{"status": "ok"}`, ...) from inside an `except` block, so no caller or test can see the failure. A response that also names what went wrong (`skipped`, `error`, `warning`, `reason`, ...) is honest and is not flagged. |
@@ -171,12 +171,12 @@ the file says so. `code_only` refuses formats where it cannot tell a comment fro
 
 ### Excusing a finding
 
-Some findings are correct code. A determinism test compares a call with itself on purpose;
+Some findings are correct code. A reflexivity test compares an object with itself on purpose;
 a branch that is today's normal state has a sibling branch that exists as a tripwire. Say so
 next to the code:
 
 ```python
-assert build(seed=1) == build(seed=1)  # falsify: ok determinism check
+assert point == point  # falsify: ok Point.__eq__ must be reflexive
 
 # falsify: ok the fixture kills the child after 5 seconds
 proc.wait()
@@ -238,11 +238,17 @@ not what is read: the whole configured project is still read, so a guard called 
 file is still seen as called.
 
 **Exit codes**, for every command: `0` clean, `1` findings, `2` could not check (bad
-configuration, a path that does not exist, nothing to check, a file that does not parse, a
-suite that did not run, or a suspect that could not be judged). A scan that examined nothing
-exits `2`, not `0`: a clean result over zero files would mean nothing. A file that does not
-parse (a syntax error, or syntax newer than the Python running falsify) is named and also
-exits `2`, and fails `pytest --falsify`; if it is broken on purpose, add it to `exclude`.
+configuration, a path that does not exist, nothing to check, a suite that did not run, or a
+suspect that could not be judged). A scan that examined nothing exits `2`, not `0`: a clean
+result over zero files would mean nothing.
+
+A file that does not parse (a syntax error, or syntax newer than the Python running falsify,
+such as Python 3.14's `t"..."` strings under 3.12) is **skipped**, not a failure. It is named on
+standard error, counted in the summary (`47 files checked, 1 skipped`) and in the `--json`
+report (`skipped`, and `unparsed` with the reason), and it does not change the exit code, so one
+file the running Python cannot read no longer fails a scan that checked everything else. A
+skipped file is not checked: fix it, or run falsify under the Python it is written for. When
+every file fails to parse, nothing was checked and the scan exits `2`.
 
 `--json` prints a machine-readable report, for CI annotations or dashboards.
 
@@ -262,8 +268,22 @@ exits `2`, and fails `pytest --falsify`; if it is broken on purpose, add it to `
 - **Undecidable is never a finding.** A module with a module-level `__getattr__`, writes
   through `globals()`, or a star import from outside your project cannot be resolved from
   its text, so names in it are not reported. That costs some misses and buys no false alarms.
-- **`phantom-patch` imports standard-library and installed modules** to resolve targets
-  outside your project, the same way the test itself would. Your own modules are only read.
+- **A module that registers modules at run time hides what is below it.** `requests` writes
+  `requests.packages.urllib3.*` into `sys.modules` when `requests.packages` is imported, and a
+  package can serve modules from an import hook (a `sys.meta_path` finder) that it installs when it
+  is imported. No file defines those modules, and falsify never imports your code to find out
+  whether they exist, so
+  `missing-import` does not report a module below one that writes to `sys.modules` or touches
+  `sys.meta_path` / `sys.path_hooks` (in itself, or in a module its `__init__.py` imports).
+  A module your build writes into the source tree (a `_version.py` from setuptools-scm) is
+  absent from a fresh checkout: generate it first, or excuse the import with
+  `# falsify: ok <why>`.
+- **`phantom-patch` imports installed modules** to resolve targets outside your project, the
+  same way the test itself would. Your own modules are only read. A missing standard-library
+  name is never reported (so a typo in one is not caught), and neither is a name that the
+  module being patched itself uses without defining, or looks up with `getattr` / `hasattr`:
+  both look the same as a patch that creates the name on purpose, which is what
+  `raising=False` and `create=True` are for.
   A module found inside your project that is not under `import_roots` (say, `lib/` added to
   pytest's `pythonpath`) is never imported, so its targets are left undecided; add its
   directory to `import_roots` to have them checked. Packages installed in a virtual
@@ -274,7 +294,11 @@ exits `2`, and fails `pytest --falsify`; if it is broken on purpose, add it to `
   classmethod, `Client.retries = 3` in another module) count as existing.
 - **`unwired-guard` is lenient on purpose.** Any reference outside the tests counts as
   wired, including an import that is never called. Methods of classes that inherit from
-  something are skipped, because a framework may call an override by name.
+  something are skipped, because a framework may call an override by name. So are `@nox.session`
+  functions (nox calls them) and the public methods of a class your package exports, because
+  the people who use the package call those and nothing inside it has to. A class is exported
+  when an `__all__` lists it or a package's `__init__.py` imports it by name; a private method
+  (`_validate_x`) or a method of a class you do not export is still reported.
 - **`unbounded-wait` recognizes common receivers**: variables assigned from `Thread`,
   `Event`, `Condition`, `Popen`, `Queue` and `executor.submit()`, or named like them
   (`t`, `worker`, `done`, `ready`, `q`, `queue`, `future`). A wait on an object it cannot
@@ -294,6 +318,8 @@ exits `2`, and fails `pytest --falsify`; if it is broken on purpose, add it to `
   assertion.
 - **`code_only` for JavaScript and CSS** skips `/*` inside quoted strings. A regular
   expression literal that contains `/*` or a quote character can still confuse it.
+- **A file that does not parse is not checked.** It is skipped with a notice (see the exit codes
+  above), so a clean result covers the other files only; the summary says how many were skipped.
 - Findings in code you did not write (vendored libraries) are best handled with `exclude`.
 
 ### Using it as a library

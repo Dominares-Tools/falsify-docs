@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.0.3
+
+Five fixes from a run of falsify over public projects: four rules that reported correct code,
+and a scan that failed over one file it could not read. Each has a regression test.
+
+- `phantom-patch` no longer reports a name that `raising=False` or `create=True` creates on
+  purpose: a standard-library name (`sys.real_prefix`, `sys.gettotalrefcount` and
+  `builtins.__IPYTHON__` differ by platform and Python version, so creating one simulates an
+  environment) and a name your own module uses without defining, or looks up with
+  `getattr` / `hasattr` (a snippet that calls `DBSession()`, a class that reads
+  `self.timeout`). A patch aimed at a renamed or misspelled name in your own code or an
+  installed package is still reported.
+- `missing-import` leaves alone a module below one that registers modules at run time.
+  `requests.packages.urllib3` exists because `requests.packages` writes it into `sys.modules`,
+  and a package can serve modules from an import hook it installs. falsify still never imports
+  your code, so it reads the modules above the missing one: if one writes to `sys.modules` or
+  touches `sys.meta_path` / `sys.path_hooks`, in itself or in a module its `__init__.py`
+  imports, it may provide any name below it, and the import is left undecided.
+- `unfalsifiable-assert` reports `assert x == x` only when both sides are the same name,
+  attribute or literal. `assert Point(1, 2) == Point(1, 2)` and
+  `assert hash(key(1)) == hash(key(1))` build an object on each side, so they test `__eq__` and
+  `__hash__` and can fail. `assertEqual` and `assertIs` follow the same rule. Most of the 65
+  hits in the run were this shape.
+- `unwired-guard` no longer reports `@nox.session` functions (nox calls them) or the public
+  methods of a class your package exports, listed in an `__all__` or imported by name in a
+  package `__init__.py` (the people who use the package call those). A private method, and a
+  method of a class you do not export, are still reported.
+- A file the running Python cannot parse (a syntax error, or newer syntax such as Python 3.14's
+  `t"..."` strings under 3.12) is skipped with a notice instead of making the whole scan exit
+  `2`. It is counted as skipped in the summary and as `skipped` in the `--json` report. A scan
+  in which no file could be checked still exits `2`, and `pytest --falsify` follows the same
+  rule.
+
 ## 1.0.2
 
 Documentation and packaging only. The code is unchanged.
