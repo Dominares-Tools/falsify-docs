@@ -12,7 +12,7 @@ Buy falsify at https://dominares.org/tools/falsify: one payment of $49, plus sal
 
 Requirements: The static checks need no other package (tomli comes with it on Python 3.10). The [coverage] extra adds coverage.py, which falsify dead-asserts needs.
 
-This page documents version 1.0.3. Install commands and file paths in the documentation below run inside the private repository you are invited to; the source is not in this repository.
+This page documents version 1.0.4. Install commands and file paths in the documentation below run inside the private repository you are invited to; the source is not in this repository.
 
 ## Documentation
 
